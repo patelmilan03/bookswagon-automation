@@ -2,55 +2,31 @@ import json
 import os
 import sys
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import requests
+from bs4 import BeautifulSoup
+
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def get_price(url):
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-images')
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+    """Fetch the selling price from a Bookswagon product page."""
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
 
-    print(f"  🔧 Starting Chrome (headless)...")
-    driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(30)
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-    try:
-        print(f"  🌐 Loading page: {url[:80]}...")
-        driver.get(url)
-        print(f"  ✅ Page loaded. Waiting for price element...")
+    price_el = soup.find(class_="originalprice")
+    if not price_el:
+        raise ValueError("Could not find price element (class='originalprice') on page")
 
-        # Wait for the price element to load
-        price_element = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "originalprice"))
-        )
-        price_text = price_element.text
-        print(f"  💰 Raw price text: '{price_text}'")
-
-        # Clean the string: remove '₹', commas, and whitespace
-        clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
-        return clean_price
-    except Exception as e:
-        # Dump page title and source snippet for debugging in CI
-        try:
-            print(f"  ⚠️  Page title: {driver.title}")
-            print(f"  ⚠️  Page source (first 500 chars): {driver.page_source[:500]}")
-        except Exception:
-            pass
-        raise
-    finally:
-        driver.quit()
-
+    price_text = price_el.text.strip()
+    clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
+    return clean_price
 
 
 def load_books():
@@ -69,15 +45,15 @@ def fetch_all_prices(books):
         try:
             price = get_price(url)
             results.append({"name": name, "url": url, "price": price, "error": None})
-            print(f"✅ {name}: ₹{price}")
+            print(f"  ✅ {name}: ₹{price}")
         except Exception as e:
             results.append({"name": name, "url": url, "price": None, "error": str(e)})
-            print(f"❌ {name}: Failed — {e}")
+            print(f"  ❌ {name}: Failed — {e}")
     return results
 
 
 def build_message(results):
-    """Build a formatted price report message."""
+    """Build a formatted price report message (Telegram Markdown)."""
     lines = ["📚 *Bookswagon Price Report*", ""]
     for r in results:
         if r["error"]:
@@ -146,7 +122,7 @@ def send_ntfy(message):
         return
 
     # Strip markdown formatting for plain-text push notification
-    plain = message.replace("*", "").replace("**", "")
+    plain = message.replace("*", "")
     resp = requests.post(
         f"https://ntfy.sh/{topic}",
         data=plain.encode("utf-8"),
