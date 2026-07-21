@@ -1,32 +1,42 @@
 import json
 import os
 import sys
+import time
 
 import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+# cloudscraper mimics a real browser's TLS fingerprint to bypass anti-bot
+scraper = cloudscraper.create_scraper(
+    browser={"browser": "chrome", "platform": "windows", "desktop": True}
+)
 
 
-def get_price(url):
+def get_price(url, retries=2):
     """Fetch the selling price from a Bookswagon product page."""
-    resp = requests.get(url, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
+    for attempt in range(retries + 1):
+        try:
+            resp = scraper.get(url, timeout=20)
+            resp.raise_for_status()
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-    price_el = soup.find(class_="originalprice")
-    if not price_el:
-        raise ValueError("Could not find price element (class='originalprice') on page")
+            price_el = soup.find(class_="originalprice")
+            if not price_el:
+                raise ValueError("Could not find price element (class='originalprice') on page")
 
-    price_text = price_el.text.strip()
-    clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
-    return clean_price
+            price_text = price_el.text.strip()
+            clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
+            return clean_price
+        except Exception as e:
+            if attempt < retries:
+                wait = 3 * (attempt + 1)
+                print(f"    ⚠️  Attempt {attempt + 1} failed, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def load_books():
@@ -39,7 +49,7 @@ def load_books():
 def fetch_all_prices(books):
     """Fetch prices for all books. Returns list of dicts with name, url, price/error."""
     results = []
-    for book in books:
+    for i, book in enumerate(books):
         name = book["name"]
         url = book["url"]
         try:
@@ -49,6 +59,9 @@ def fetch_all_prices(books):
         except Exception as e:
             results.append({"name": name, "url": url, "price": None, "error": str(e)})
             print(f"  ❌ {name}: Failed — {e}")
+        # Small delay between requests to avoid rate limiting
+        if i < len(books) - 1:
+            time.sleep(2)
     return results
 
 
