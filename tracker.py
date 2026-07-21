@@ -16,23 +16,41 @@ def get_price(url):
     options.add_argument('--disable-gpu')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-images')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
 
+    print(f"  🔧 Starting Chrome (headless)...")
     driver = webdriver.Chrome(options=options)
-    driver.get(url)
+    driver.set_page_load_timeout(30)
+    driver.set_script_timeout(30)
 
     try:
+        print(f"  🌐 Loading page: {url[:80]}...")
+        driver.get(url)
+        print(f"  ✅ Page loaded. Waiting for price element...")
+
         # Wait for the price element to load
-        price_element = WebDriverWait(driver, 10).until(
+        price_element = WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CLASS_NAME, "originalprice"))
         )
         price_text = price_element.text
+        print(f"  💰 Raw price text: '{price_text}'")
 
         # Clean the string: remove '₹', commas, and whitespace
         clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
         return clean_price
+    except Exception as e:
+        # Dump page title and source snippet for debugging in CI
+        try:
+            print(f"  ⚠️  Page title: {driver.title}")
+            print(f"  ⚠️  Page source (first 500 chars): {driver.page_source[:500]}")
+        except Exception:
+            pass
+        raise
     finally:
         driver.quit()
+
 
 
 def load_books():
