@@ -16,9 +16,18 @@ scraper = cloudscraper.create_scraper(
 
 def get_price(url, retries=2):
     """Fetch the selling price from a Bookswagon product page."""
+    api_key = os.environ.get("SCRAPER_API_KEY")
+    
     for attempt in range(retries + 1):
         try:
-            resp = scraper.get(url, timeout=20)
+            if api_key:
+                # Route through ScraperAPI to bypass IP blocks in CI
+                payload = {'api_key': api_key, 'url': url}
+                resp = requests.get('http://api.scraperapi.com', params=payload, timeout=30)
+            else:
+                # Local execution using cloudscraper
+                resp = scraper.get(url, timeout=20)
+                
             resp.raise_for_status()
 
             soup = BeautifulSoup(resp.text, "html.parser")
