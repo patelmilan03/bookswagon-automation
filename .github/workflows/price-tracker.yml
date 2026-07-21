@@ -9,6 +9,8 @@ on:
 jobs:
   track-prices:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for keepalive-workflow to commit
 
     steps:
       - name: Checkout repo
@@ -30,3 +32,6 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python tracker.py
+
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v2
