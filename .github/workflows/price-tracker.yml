@@ -1,5 +1,8 @@
 name: Bookswagon Price Tracker
 
+permissions:
+  contents: write
+
 on:
   schedule:
     # 8:00 AM IST = 2:30 AM UTC | 8:00 PM IST = 2:30 PM UTC
