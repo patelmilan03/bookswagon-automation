@@ -10,7 +10,7 @@ jobs:
   track-prices:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Needed for keepalive-workflow to commit
+      contents: write  # Needed for keepalive commit
 
     steps:
       - name: Checkout repo
@@ -34,4 +34,10 @@ jobs:
         run: python tracker.py
 
       - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v2
+        run: |
+          # Prevents GitHub from auto-disabling scheduled workflows
+          # after 60 days of repo inactivity (replaces keepalive-workflow action)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "ci: keepalive commit [skip ci]"
+          git push
