@@ -17,7 +17,7 @@ scraper = cloudscraper.create_scraper(
 def get_price(url, retries=2):
     """Fetch the selling price from a Bookswagon product page."""
     api_key = os.environ.get("SCRAPER_API_KEY")
-    
+
     for attempt in range(retries + 1):
         try:
             if api_key:
@@ -27,7 +27,7 @@ def get_price(url, retries=2):
             else:
                 # Local execution using cloudscraper
                 resp = scraper.get(url, timeout=20)
-                
+
             resp.raise_for_status()
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -39,6 +39,19 @@ def get_price(url, retries=2):
             price_text = price_el.text.strip()
             clean_price = float(price_text.replace('₹', '').replace(',', '').strip())
             return clean_price
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 429 and attempt < retries:
+                retry_after = e.response.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after and retry_after.strip().isdigit() else 3 * (attempt + 1)
+                print(f"    ⚠️  Rate limited (429), retrying in {wait}s...")
+                time.sleep(wait)
+            elif attempt < retries:
+                wait = 3 * (attempt + 1)
+                print(f"    ⚠️  Attempt {attempt + 1} failed, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
         except Exception as e:
             if attempt < retries:
                 wait = 3 * (attempt + 1)
@@ -55,18 +68,61 @@ def load_books():
         return json.load(f)
 
 
-def fetch_all_prices(books):
-    """Fetch prices for all books. Returns list of dicts with name, url, price/error."""
+def _history_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "price_history.json")
+
+
+def load_history():
+    """Load last-seen prices per book URL (same directory as this script)."""
+    path = _history_path()
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_history(history):
+    """Persist last-seen prices per book URL."""
+    with open(_history_path(), "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+
+def fetch_all_prices(books, history):
+    """Fetch prices for all books, comparing against history for drops.
+
+    Mutates `history` in place with the latest prices. Returns list of dicts
+    with name, url, price/error, previous_price, dropped.
+    """
     results = []
     for i, book in enumerate(books):
         name = book["name"]
         url = book["url"]
         try:
             price = get_price(url)
-            results.append({"name": name, "url": url, "price": price, "error": None})
-            print(f"  ✅ {name}: ₹{price}")
+            previous_price = history.get(url, {}).get("price")
+            dropped = previous_price is not None and price < previous_price
+            results.append({
+                "name": name,
+                "url": url,
+                "price": price,
+                "error": None,
+                "previous_price": previous_price,
+                "dropped": dropped,
+            })
+            history[url] = {"price": price}
+            if dropped:
+                print(f"  📉 {name}: ₹{previous_price} → ₹{price}")
+            else:
+                print(f"  ✅ {name}: ₹{price}")
         except Exception as e:
-            results.append({"name": name, "url": url, "price": None, "error": str(e)})
+            results.append({
+                "name": name,
+                "url": url,
+                "price": None,
+                "error": str(e),
+                "previous_price": None,
+                "dropped": False,
+            })
             print(f"  ❌ {name}: Failed — {e}")
         # Small delay between requests to avoid rate limiting
         if i < len(books) - 1:
@@ -98,6 +154,23 @@ def build_discord_message(results):
         else:
             lines.append(f"📖 **{r['name']}**: ₹{r['price']}")
             lines.append(f"   🔗 {r['url']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_drop_alert(results, bold="*"):
+    """Build a standalone alert message for books whose price just dropped.
+
+    Returns None if nothing dropped this run.
+    """
+    dropped = [r for r in results if r["dropped"]]
+    if not dropped:
+        return None
+
+    lines = [f"{bold}📉 Price Drop Alert!{bold}", ""]
+    for r in dropped:
+        lines.append(f"📖 {bold}{r['name']}{bold}: ₹{r['previous_price']} → ₹{r['price']}")
+        lines.append(f"   🔗 {r['url']}")
         lines.append("")
     return "\n".join(lines)
 
@@ -161,19 +234,33 @@ def send_ntfy(message):
 
 if __name__ == "__main__":
     books = load_books()
+    history = load_history()
     print(f"Tracking {len(books)} book(s)...\n")
 
-    results = fetch_all_prices(books)
+    results = fetch_all_prices(books, history)
+    save_history(history)
 
-    # Build messages
-    tg_message = build_message(results)
-    discord_message = build_discord_message(results)
+    # Immediate alert on price drops, regardless of digest schedule
+    drop_alert_tg = build_drop_alert(results, bold="*")
+    if drop_alert_tg:
+        print("\n--- Sending Price Drop Alerts ---")
+        send_telegram(drop_alert_tg)
+        send_discord(build_drop_alert(results, bold="**"))
+        send_ntfy(drop_alert_tg)
 
-    print("\n--- Report ---")
-    print(tg_message)
+    # Full digest: always on local runs; on GitHub Actions only on the
+    # evening run (SEND_DIGEST=false skips it for the morning run).
+    send_digest = os.environ.get("SEND_DIGEST", "true").lower() == "true"
+    if send_digest:
+        tg_message = build_message(results)
+        discord_message = build_discord_message(results)
 
-    # Send notifications
-    print("\n--- Sending Notifications ---")
-    send_telegram(tg_message)
-    send_discord(discord_message)
-    send_ntfy(tg_message)
+        print("\n--- Report ---")
+        print(tg_message)
+
+        print("\n--- Sending Digest Notifications ---")
+        send_telegram(tg_message)
+        send_discord(discord_message)
+        send_ntfy(tg_message)
+    else:
+        print("\n--- Skipping digest (morning run) ---")

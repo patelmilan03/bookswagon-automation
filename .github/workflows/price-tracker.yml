@@ -34,13 +34,37 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Evening run (8pm IST) and manual runs send the full digest.
+          # Morning run (8am IST) only alerts on price drops.
+          SEND_DIGEST: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '30 14 * * *' }}
         run: python tracker.py
 
-      - name: Keepalive Workflow
+      - name: Commit price history if changed
         run: |
-          # Prevents GitHub from auto-disabling scheduled workflows
-          # after 60 days of repo inactivity (replaces keepalive-workflow action)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit --allow-empty -m "ci: keepalive commit [skip ci]"
-          git push
+          git add price_history.json
+          if git diff --cached --quiet; then
+            echo "No price changes to commit"
+          else
+            git commit -m "chore: update price history [skip ci]"
+            git push
+          fi
+
+      - name: Keepalive commit if repo idle
+        run: |
+          # Only commits if the repo hasn't had activity in a while, instead
+          # of unconditionally on every run (prevents GitHub from disabling
+          # the cron after 60 days of inactivity, without spamming history).
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          last_commit_epoch=$(git log -1 --format=%ct)
+          now_epoch=$(date +%s)
+          days_since=$(( (now_epoch - last_commit_epoch) / 86400 ))
+          echo "Days since last commit: $days_since"
+          if [ "$days_since" -ge 45 ]; then
+            git commit --allow-empty -m "ci: keepalive commit [skip ci]"
+            git push
+          else
+            echo "Repo active, skipping keepalive"
+          fi
