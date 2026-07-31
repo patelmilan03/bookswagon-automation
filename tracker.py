@@ -21,9 +21,11 @@ def get_price(url, retries=2):
     for attempt in range(retries + 1):
         try:
             if api_key:
-                # Route through ScraperAPI to bypass IP blocks in CI
+                # Route through ScraperAPI to bypass IP blocks in CI.
+                # Timeout is generous because ScraperAPI's own anti-bot
+                # bypass for protected sites can take well over 30s.
                 payload = {'api_key': api_key, 'url': url}
-                resp = requests.get('http://api.scraperapi.com', params=payload, timeout=30)
+                resp = requests.get('https://api.scraperapi.com', params=payload, timeout=70)
             else:
                 # Local execution using cloudscraper
                 resp = scraper.get(url, timeout=20)
